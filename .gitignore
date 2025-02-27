@@ -1,0 +1,7 @@
+*.png
+Modulation
+*pycache*
+checkpoints
+data
+.idea
+*.pyc
