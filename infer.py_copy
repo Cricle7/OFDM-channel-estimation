@@ -1,0 +1,177 @@
+import os
+import numpy as np
+import torch
+import models
+import socket
+import time
+import matplotlib.pyplot as plt
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Try to use GPU
+
+class UDPConfig:
+    def __init__(self):
+        self.sample_length = 30720  # Length of the sample data
+
+udp_cfg = UDPConfig()
+
+# This function simulates generating QPSK modulation
+def qpsk_modulation(data):
+    """
+    This function assumes the input 'data' is a 1D array of 0s and 1s.
+    It groups the bits into pairs, and maps them to QPSK symbols.
+    """
+    symbols = []
+    for i in range(0, len(data), 2):
+        bits = data[i:i+2]
+        if bits[0] == 0 and bits[1] == 0:
+            symbols.append(1 + 1j)  # Symbol for 00
+        elif bits[0] == 0 and bits[1] == 1:
+            symbols.append(1 - 1j)  # Symbol for 01
+        elif bits[0] == 1 and bits[1] == 0:
+            symbols.append(-1 + 1j)  # Symbol for 10
+        elif bits[0] == 1 and bits[1] == 1:
+            symbols.append(-1 - 1j)  # Symbol for 11
+    return np.array(symbols)
+
+# This function simulates OFDM modulation (IDFT and adding CP)
+def ofdm_modulation(qpsk_symbols, N, CP_length):
+    """
+    N: Number of subcarriers
+    CP_length: Length of cyclic prefix
+    """
+    # Reshape QPSK symbols into N subcarriers
+    data = np.reshape(qpsk_symbols, (-1, N))
+    
+    # Apply IFFT to each row to transform into time domain
+    ofdm_symbols = np.fft.ifft(data, axis=1)
+    
+    # Add cyclic prefix by taking the last CP_length samples and prepending them to the symbol
+    ofdm_symbols_cp = np.concatenate([ofdm_symbols[:, -CP_length:], ofdm_symbols], axis=1)
+    return ofdm_symbols_cp
+
+# Channel estimation using a deep neural network (a placeholder model)
+def channel_estimation_ofdm(received_signal, N, CP_length, model):
+    # Remove cyclic prefix
+    received_signal = received_signal[:, CP_length:]
+    
+    # Apply FFT to get frequency domain representation
+    signal_freq = np.fft.fft(received_signal, axis=1)
+    
+    # Pass the frequency-domain signal through the model for channel estimation
+    signal_freq = torch.from_numpy(signal_freq.astype(np.float32)).to(DEVICE)
+    with torch.no_grad():
+        estimated_channel = model(signal_freq)
+    return estimated_channel
+
+# Demodulate OFDM signal (assumes QPSK modulation)
+def demodulate_ofdm(ofdm_signal, N):
+    # Apply FFT to get the frequency domain signal
+    signal_freq = np.fft.fft(ofdm_signal, axis=1)
+    
+    # Demodulate QPSK symbols (based on phase)
+    demodulated_data = np.angle(signal_freq)
+    demodulated_bits = np.array(demodulated_data > 0, dtype=int)  # Mapping phase > 0 to 1, phase <= 0 to 0
+    return demodulated_bits
+
+# RF loopback simulation to send data via UDP
+def rf_loopback(tx_data_IQ, pcip, xsrpip):
+    SAMPLE_LENGTH = 30720  # Fixed sample length for each transmission frame
+    TxdataI = np.zeros(SAMPLE_LENGTH)
+    TxdataQ = np.zeros(SAMPLE_LENGTH)
+    
+    if tx_data_IQ.shape[0] >= SAMPLE_LENGTH:
+        TxdataI = np.real(tx_data_IQ[0:SAMPLE_LENGTH])
+        TxdataQ = np.imag(tx_data_IQ[0:SAMPLE_LENGTH])
+    else:
+        TxdataI[1:tx_data_IQ.shape[0]] = np.real(tx_data_IQ)
+        TxdataQ[1:tx_data_IQ.shape[0]] = np.imag(tx_data_IQ)
+
+    dataIQ = np.zeros(SAMPLE_LENGTH * 2)
+    for i in range(SAMPLE_LENGTH):
+        dataIQ[i * 2] = TxdataI[i]
+        dataIQ[i * 2 + 1] = TxdataQ[i]
+    
+    dataIQ = dataIQ * (2047 / max(dataIQ))  # Amplify peak value
+    dataIQ = np.fix(dataIQ)  # Convert to integer values
+
+    for i in range(len(dataIQ)):
+        if dataIQ[i] > 2047:
+            dataIQ[i] = 2047
+        elif dataIQ[i] < 0:
+            dataIQ[i] = 4096 + dataIQ[i]
+    
+    for i in range(SAMPLE_LENGTH):
+        dataIQ[i * 2] = dataIQ[i * 2] * 16
+        dataIQ[i * 2 + 1] = np.fix(dataIQ[i * 2 + 1] / 256) + np.mod(dataIQ[i * 2 + 1], 256) * 256
+    dataIQ = dataIQ.astype("uint16")
+
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_socket.sendto(dataIQ.tobytes(), (pcip, 12345))
+    udp_socket.close()
+
+# Main function to orchestrate the OFDM modulation, estimation, and demodulation
+def main():
+    # Load the pre-trained model for channel estimation
+    model_path = 'checkpoints/ofdm_channel_model.pth'
+    model = models.DnnNet0()  # Placeholder for a suitable model
+    model = model.to(DEVICE)
+    model.load_state_dict(torch.load(model_path))
+    model.eval()
+
+    udp_addr = ('192.168.1.180', 12345)
+    dest_addr = ('192.168.1.166', 13345)
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_socket.bind(udp_addr)
+    udp_socket.settimeout(5)
+
+    while True:
+        # Receiving data from the RF loopback
+        recv_data_all = None
+        for package_id in range(128):
+            try:
+                recv_data, source = udp_socket.recvfrom(960)
+                if recv_data_all:
+                    recv_data_all = recv_data_all + recv_data
+                else:
+                    recv_data_all = recv_data
+            except socket.timeout:
+                print("Timeout occurred, no data received.")
+                break
+
+        if len(recv_data_all) == udp_cfg.sample_length * 4:
+            break
+
+    print("Received data, starting processing.")
+    # Convert received data to float
+    recv_data_all_int = np.frombuffer(recv_data_all, dtype=np.int16)
+    recv_data_all_float = recv_data_all_int.astype(np.float32)
+    
+    # Process the I and Q components
+    udp_data_ri = recv_data_all_float[::4] / 2047
+    udp_data_rq = recv_data_all_float[1::4] / 2047
+
+    # Combine the real and imaginary components into a complex signal
+    sample_mod = udp_data_ri + 1j * udp_data_rq
+
+    # Perform channel estimation
+    N = 256  # Number of subcarriers
+    CP_length = 32  # Length of cyclic prefix
+    estimated_channel = channel_estimation_ofdm(sample_mod, N, CP_length, model)
+
+    # Perform demodulation
+    demodulated_bits = demodulate_ofdm(sample_mod, N)
+
+    # Compute Bit Error Rate (BER)
+    true_bits = np.random.randint(0, 2, len(demodulated_bits))
+    ber = np.sum(demodulated_bits != true_bits) / len(demodulated_bits)
+    print(f"Bit Error Rate: {ber:.4f}")
+
+    # Measure latency
+    start_time = time.time()
+    # Assume inference here
+    end_time = time.time()
+    latency = end_time - start_time
+    print(f"Inference latency: {latency:.4f} seconds")
+
+if __name__ == "__main__":
+    main()

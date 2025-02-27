@@ -317,29 +317,29 @@ def main():
     #sample_mod = scipy.io.loadmat('./data/BPSK.mat')['moddata'][0]
     each_sample_num = 20
     input_data=[]
-    print("preprocessing input")
-    for i in range(each_sample_num):
-        current_frame = sample_mod[i * 128:(i + 1) * 128]
-        current_frame = np.concatenate((np.real(current_frame), np.imag(current_frame)), axis=0)
-        input_data.append(current_frame)
-    input_data = np.vstack(input_data)
-    input_data = input_data.reshape((-1, 256))
-    #scaler = sklearn.preprocessing.MinMaxScaler()
-    #input_data = scaler.fit_transform(input_data)
-    for i in range(input_data.shape[0]):
-        input_data[i]=input_data[i]/np.max(input_data[i])
-    input_data = input_data.reshape((-1, 1, 2, 128))
-    mod_type=['qam16','qam64','qpsk','fm','am','bpsk']
-    pred_count=np.zeros(6)
-    print("infering model")
-    for i in range(each_sample_num):
-        current_input=torch.from_numpy(input_data[i].astype("float32")).to(DEVICE)
-        with torch.no_grad():
-            output = model(current_input)[0]
-        predict = np.argmax(output.to("cpu").numpy())
-        pred_count[predict]=pred_count[predict]+1
-    for i in range(6):
-        print("{}: {}".format(mod_type[i],pred_count[i]/each_sample_num))
+#    print("preprocessing input")
+    #for i in range(each_sample_num):
+        #current_frame = sample_mod[i * 128:(i + 1) * 128]
+        #current_frame = np.concatenate((np.real(current_frame), np.imag(current_frame)), axis=0)
+        #input_data.append(current_frame)
+    #input_data = np.vstack(input_data)
+    #input_data = input_data.reshape((-1, 256))
+    ##scaler = sklearn.preprocessing.MinMaxScaler()
+    ##input_data = scaler.fit_transform(input_data)
+    #for i in range(input_data.shape[0]):
+        #input_data[i]=input_data[i]/np.max(input_data[i])
+    #input_data = input_data.reshape((-1, 1, 2, 128))
+    #mod_type=['qam16','qam64','qpsk','fm','am','bpsk']
+    #pred_count=np.zeros(6)
+    #print("infering model")
+    #for i in range(each_sample_num):
+        #current_input=torch.from_numpy(input_data[i].astype("float32")).to(DEVICE)
+        #with torch.no_grad():
+            #output = model(current_input)[0]
+        #predict = np.argmax(output.to("cpu").numpy())
+        #pred_count[predict]=pred_count[predict]+1
+    #for i in range(6):
+        #print("{}: {}".format(mod_type[i],pred_count[i]/each_sample_num))
 
 if __name__=="__main__":
     main()
