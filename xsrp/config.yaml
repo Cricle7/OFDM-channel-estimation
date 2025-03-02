@@ -1,0 +1,15 @@
+modulation:
+  modetype: 6
+  fs: 30720
+  length: 30000
+  fm: 200
+  fc: 3000
+  recurrent_num: 10
+  frame_len: 30720
+  pcip: "192.168.1.180"
+  xsrpip: "192.168.1.166"
+  port: 12345
+  # fs: 采样频率
+  # len: 采样点数
+  # fm: 基带信号频率
+  # fc: 载波频率
